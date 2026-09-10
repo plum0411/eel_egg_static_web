@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="Japanese eel egg diameter analyzer — static browser app." />
+  <title>Japanese Eel Egg Diameter Analyzer</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<header class="topbar">
+  <div>
+    <h1>Japanese Eel Egg Diameter Analyzer</h1>
+    <p>Grid calibration → Segmentation → ECD → KDE → CSV / PNG / ZIP</p>
+  </div>
+  <div id="cvStatus" class="status loading">OpenCV.js 載入中…</div>
+</header>
+
+<main>
+  <section class="card notice">
+    <strong>瀏覽器端分析：</strong>
+    原始照片只在目前瀏覽器中處理。此靜態網站沒有後端影像上傳 API。
+  </section>
+
+  <section class="card">
+    <h2>1. 校正圖片</h2>
+    <p class="hint">
+      你目前提供的是網格／血球計數盤校正圖。請上傳校正圖後，
+      在下方圖片依序點選兩個已知距離的刻度位置，再輸入兩點之間的實際距離。
+    </p>
+
+    <div class="grid three">
+      <label class="field">
+        <span>校正圖</span>
+        <input id="calibrationFile" type="file" accept="image/*" />
+      </label>
+
+      <label class="field">
+        <span>兩點的實際距離</span>
+        <input id="knownDistance" type="number" min="0" step="any" value="50" />
+        <small>例如兩條相鄰細格線若實際相距 50 µm，就填 50。</small>
+      </label>
+
+      <label class="field">
+        <span>物理單位</span>
+        <input id="unitLabel" type="text" value="um" maxlength="12" />
+        <small>例如 um 或 µm。</small>
+      </label>
+    </div>
+
+    <div class="calibration-toolbar">
+      <button id="clearPointsBtn" type="button">重新選兩點</button>
+      <span id="calibrationClickInfo">尚未選點</span>
+    </div>
+
+    <div id="calibrationPickerWrap" class="picker-wrap hidden">
+      <canvas id="calibrationPicker"></canvas>
+    </div>
+
+    <div class="calibration-help">
+      <strong>建議：</strong>
+      優先選擇清楚、相鄰且同方向的網格線。若選 1 個小格，填 1 個小格的實際長度；
+      若跨 4 個小格，就填 4 個小格的總實際長度。跨越更多格可降低單次點選誤差。
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>2. 卵巢影像與參數</h2>
+
+    <label class="field">
+      <span>卵巢顯微鏡圖片（可多選）</span>
+      <input id="sampleFiles" type="file" accept="image/*" multiple />
+    </label>
+
+    <div class="grid three settings-top">
+      <label class="field">
+        <span>Minimum area (px²)</span>
+        <input id="minArea" type="number" value="150" min="0" step="1" />
+        <small>依你提供的實際卵圖，預設從原本 60 提高到 150，以減少細小碎屑。</small>
+      </label>
+
+      <label class="field">
+        <span>Minimum circularity</span>
+        <input id="minCircularity" type="number" value="0.45" min="0" max="1" step="0.01" />
+      </label>
+
+      <label class="field checkbox-field">
+        <span>Border objects</span>
+        <label class="checkbox-line">
+          <input id="excludeBorder" type="checkbox" checked />
+          排除碰到影像邊界的物件
+        </label>
+        <small>可避免只拍到半顆卵時低估直徑。</small>
+      </label>
+    </div>
+
+    <details>
+      <summary>進階 Watershed / KDE 參數</summary>
+      <div class="grid four settings-grid">
+        <label class="field">
+          <span>Peak distance (px)</span>
+          <input id="minPeakDistancePx" type="number" value="8" min="1" step="1" />
+        </label>
+
+        <label class="field">
+          <span>Peak distance (real unit)</span>
+          <input id="minPeakDistanceReal" type="number" min="0" step="any" placeholder="空白＝使用 px" />
+        </label>
+
+        <label class="field">
+          <span>Gaussian kernel</span>
+          <input id="gaussianKernel" type="number" value="5" min="1" step="2" />
+        </label>
+
+        <label class="field">
+          <span>Morphology kernel</span>
+          <input id="morphKernel" type="number" value="5" min="1" step="1" />
+        </label>
+
+        <label class="field">
+          <span>Open iterations</span>
+          <input id="openIterations" type="number" value="1" min="0" step="1" />
+        </label>
+
+        <label class="field">
+          <span>Close iterations</span>
+          <input id="closeIterations" type="number" value="1" min="0" step="1" />
+        </label>
+
+        <label class="field">
+          <span>KDE bandwidth</span>
+          <input id="kdeBandwidth" type="number" min="0" step="any" placeholder="自動" />
+        </label>
+
+        <label class="field">
+          <span>Threshold mode</span>
+          <input value="Otsu (dark objects)" disabled />
+          <small>目前針對你的淡黃背景＋深色卵影像。</small>
+        </label>
+      </div>
+    </details>
+
+    <div class="actions">
+      <button id="analyzeBtn" class="primary" disabled>開始分析</button>
+      <button id="resetBtn" type="button">清除分析結果</button>
+    </div>
+
+    <div class="progress-wrap">
+      <progress id="progress" value="0" max="100"></progress>
+      <span id="progressText">等待資料</span>
+    </div>
+  </section>
+
+  <section id="calibrationSection" class="card hidden">
+    <h2>3. Calibration 結果</h2>
+    <div id="calibrationSummary" class="metrics"></div>
+    <div class="canvas-wrap">
+      <canvas id="calibrationResultCanvas"></canvas>
+    </div>
+  </section>
+
+  <section id="resultsSection" class="card hidden">
+    <div class="section-heading">
+      <div>
+        <h2>4. 分析結果</h2>
+        <p id="resultSummary"></p>
+      </div>
+      <button id="downloadZipBtn" class="primary" disabled>下載全部結果 ZIP</button>
+    </div>
+
+    <div id="totalMetrics" class="metrics"></div>
+
+    <div class="canvas-wrap">
+      <canvas id="totalDistributionCanvas"></canvas>
+    </div>
+
+    <h3>每張圖片摘要</h3>
+    <div class="table-wrap">
+      <table id="summaryTable">
+        <thead>
+          <tr>
+            <th>檔名</th>
+            <th>n</th>
+            <th>Mean</th>
+            <th>Median</th>
+            <th>Std</th>
+            <th>Min</th>
+            <th>Max</th>
+            <th>Rejected</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <h3>輸出檔案</h3>
+    <div id="downloads" class="downloads"></div>
+  </section>
+
+  <section id="previewSection" class="card hidden">
+    <h2>5. Segmentation QC 預覽</h2>
+    <p>紅線＝最後保留的物件；黃線＝Watershed 分界。請先抽查這裡，再採用統計結果。</p>
+    <div id="previews" class="preview-grid"></div>
+  </section>
+</main>
+
+<footer>
+  <p>Equivalent Circular Diameter (ECD) = 2 × √(Area / π)</p>
+</footer>
+
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<script async src="https://docs.opencv.org/4.x/opencv.js"></script>
+<script src="app.js" defer></script>
+</body>
+</html>
